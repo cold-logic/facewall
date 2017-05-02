@@ -55,7 +55,7 @@ class FaceWallView extends View
         $employee = (employee, height, width) -> """
             <a data-email="#{employee.email}" class="employee facewall-flyin" style="width: #{width}px; height: #{height}px;">
                 <span class="name">#{employee.firstName.substr(0, 1) + employee.lastName.substr(0, 1)}</span>
-                <img class="photo" src="#{view.avatarInGridSize(employee.gravatar)}" />
+                <img class="photo" src="#{view.getThumbnailUrl(employee)}" />
             </a>
         """
 
@@ -70,16 +70,31 @@ class FaceWallView extends View
             employee_img = new Image()
 
             employee_img.onload = ->
-                employee_loaded()
                 goodBucket.push employee
+                employee_loaded()
 
             employee_img.onerror = ->
-                employee_loaded()
                 badBucket.push employee
+                employee_loaded()
 
-            employee_img.src = view.avatarInGridSize(employee.gravatar)
+            employee_img.src = view.getThumbnailUrl(employee)
 
         employees_loaded = 0
+
+        writeEmployeeRow = (row_bucket, row_count) =>
+            $row = $ """
+                <div class="employee-row"></div>
+            """
+            $fw.append $row
+
+            _.each row_bucket, (employee_in_row, index) ->
+                width = grid[index]
+
+                setTimeout ->
+                    $('#loader').hide() is index is 0
+                    $row.append $employee(employee_in_row, grid[0], width)
+
+                , (((row_count * grid.length) + index) * 30)
 
         employee_loaded = =>
             employees_loaded += 1
@@ -90,31 +105,19 @@ class FaceWallView extends View
 
                 if @useAutoSizingNextTime and goodBucket.length > 0
                     @useAutoSizingNextTime = false
-                    @columnWidth = (Math.sqrt(($(window).width() * $(window).height())  / goodBucket.length)) * (1 / 0.7)
+                    @columnWidth = @getOptimumGridColumnWidth @getOptions(), goodBucket.length
                     view.render()
 
                 _.each goodBucket, (employee) ->
                     if row_bucket.length is grid.length
-
-                        $row = $ """
-                            <div class="employee-row"></div>
-                        """
-                        $fw.append $row
-
-                        _.each row_bucket, (employee_in_row, index) ->
-
-                            width = grid[index]
-
-                            setTimeout ->
-                                $('#loader').hide() is index is 0
-                                $row.append $employee(employee_in_row, grid[0], width)
-
-                            , (((row_count * grid.length) + index) * 30)
-
+                        writeEmployeeRow row_bucket, row_count
                         row_bucket = []
                         row_count += 1
 
                     row_bucket.push employee
+
+                if row_bucket.length > 0
+                    writeEmployeeRow row_bucket, row_count
 
                 return
 
@@ -170,7 +173,6 @@ class FaceWallView extends View
 
         @flyToFeatured() if @threedee
 
-        image_size = 600
         employee_img = new Image()
         view.zindex += 3
         employee_img.onload = ->
@@ -180,13 +182,13 @@ class FaceWallView extends View
                 <a data-email="#{employee.email}" class="employee featured featured-employee facewall-featureEmployee-and-flipInY" style="z-index: #{view.zindex}">
                     <span class="name">#{employee.firstName}</span>
                     <span class="role">#{employee.role}</span>
-                    <img class="photo" src="#{employee.gravatar}&s=#{image_size}" />
+                    <img class="photo" src="#{view.getFullImageUrl(employee)}"" />
                 </a>
             """
         employee_img.onerror = ->
             view.unfeatureEmployee()
 
-        employee_img.src = "#{employee.gravatar}&s=#{image_size}"
+        employee_img.src = "#{view.getFullImageUrl(employee)}"
 
     unfeatureEmployee: =>
         $fw = $(@el).find('.facewall')
@@ -316,39 +318,46 @@ class FaceWallView extends View
             search = _.map(@search.split(' '), (w) -> _.map(w.split("'"), (p) -> _.capitalize(p)).join("'")).join('&nbsp;')
             $search.addClass('facewall-flyin').addClass('facewall-search-opened').html search
 
-    # Imported from sexy grid plugin from https://git.hubteam.com/HubSpot/style_guide/blob/master/static/js/components/sexy-grid-helpers.coffee
-    getOptimumGridColumnWidths: (options) ->
-        currentBestWidth = options.width
-        currentBestNumColumns = 1
+    printLine = (line, text) -> console.log line + " " + text
 
-        for numColumns in [options.minColumns...options.maxColumns]
-            candidateWidth = parseInt(options.width / numColumns, 10)
-            if options.minWidth < candidateWidth < options.maxWidth
-                currentBestWidth = candidateWidth
-                currentBestNumColumns = numColumns
-
-        remainder = options.width % currentBestWidth
-        return ((currentBestWidth + (if num is currentBestNumColumns then remainder else 0)) for num in [1..currentBestNumColumns])
-
-    getGrid: (columnWidth, attempts) ->
+    getOptions: () ->
         options =
             width: $(window).width()
-            minColumns: 5
+            height: $(window).height()
+            minColumns: 3
             maxColumns: 100
-            minWidth: parseInt(columnWidth * 0.7, 10)
-            maxWidth: parseInt(columnWidth * 1.3, 10)
+        return options
 
-        attempts = attempts or 0
-        grid = @getOptimumGridColumnWidths options
+    getOptimumGridColumnWidth: (options, numPictures) ->
+        currentBestSide = 0
 
-        return grid if attempts > 20
+        if numPictures < 2
+            return options.width
 
-        if grid.length is 1
-            options.width -= 1
-            @getGrid options, attempts + 1
+        #Find a rows/columns combination that would give biggest images size
+        for numColumns in [options.minColumns...options.maxColumns]
+            numLastRow = numPictures % numColumns
+            numRows = parseInt(numPictures / numColumns, 10)
+            if numLastRow > 0
+                numRows += 1
 
-        else
-            grid
+            candidateWidth = parseInt(options.width / numColumns, 10)
+            candidateHeight = parseInt(options.height / numRows, 10)
+
+            # Making sure all pictures will fit
+            candidateSide = Math.min(candidateWidth, candidateHeight)
+            if candidateSide > currentBestSide
+                currentBestSide = candidateSide
+
+        return currentBestSide
+
+    getGrid: (columnWidth) ->
+        width = $(window).width()
+        if columnWidth is 0
+            columnWidth = width
+
+        numColumns = parseInt(width / columnWidth, 10)
+        return (columnWidth for num in [1..numColumns])
 
     setThreeDee: =>
         $(@el).find('.facewall')["#{if @threedee then 'add' else 'remove'}Class"]('facewall-threedee')
@@ -380,7 +389,16 @@ class FaceWallView extends View
             </style>
         """
 
-    avatarInGridSize: (url) =>
-        "#{url}&s=#{@grid[0]}&_=#{@cache_bust_image_counter}"
+    getThumbnailUrl: (employee) =>
+        if employee.thumbnail?
+            return "#{employee.thumbnail}"
+        else
+            return "#{employee.gravatar}&s=#{@grid[0]}&_=#{@cache_bust_image_counter}"
+
+    getFullImageUrl: (employee) =>
+        if employee.fullImage?
+            return "#{employee.fullImage}"
+        else
+            return "#{employee.gravatar}&s=600"
 
 module.exports = FaceWallView
